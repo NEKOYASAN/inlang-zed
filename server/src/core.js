@@ -2,7 +2,28 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
-const SKIP_DIRS = new Set([".git", ".hg", ".svn", "node_modules", "target", "dist", "build"])
+const SKIP_DIRS = new Set([
+  ".git",
+  ".hg",
+  ".svn",
+  ".svelte-kit",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules",
+  "target",
+])
+const SOURCE_EXTENSIONS = new Set([
+  ".astro",
+  ".html",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".svelte",
+  ".ts",
+  ".tsx",
+  ".vue",
+])
 const DEFAULT_MAX_HINT_LENGTH = 80
 
 export function uriToPath(uri) {
@@ -461,6 +482,13 @@ export function createDefinition(text, project, position) {
   return locations.length > 0 ? locations : undefined
 }
 
+export async function createReferences({ documentUri, text, position, project }) {
+  const messageId = messageIdAtPositionInMessageFile({ documentUri, text, position, project })
+  if (!messageId) return []
+
+  return findProjectReferenceLocations(project, messageId)
+}
+
 export function createDiagnostics(text, project) {
   const diagnostics = []
 
@@ -503,6 +531,182 @@ export function createDiagnostics(text, project) {
   }
 
   return diagnostics
+}
+
+export async function createReferenceCodeLenses({ documentUri, text, project }) {
+  const documentPath = uriToPath(documentUri)
+  if (!documentPath || !isMessageFile(project, documentPath)) return []
+
+  const messages = parseMessagesFromText(text)
+  if (!messages) return []
+
+  const referenceCounts = await countProjectReferences(project)
+  const referenceLocationsByMessage = await findProjectReferenceLocationsByMessage(project)
+  const lenses = []
+
+  for (const messageId of messages.keys()) {
+    const range = findJsonKeyRange(text, messageId)
+    if (!range) continue
+
+    const count = referenceCounts.get(messageId) ?? 0
+    const referenceLocations = referenceLocationsByMessage.get(messageId) ?? []
+    const firstReference = referenceLocations[0]
+    lenses.push({
+      range,
+      command: {
+        title: `${count} ${count === 1 ? "reference" : "references"}`,
+        command: firstReference ? "editor.action.showReferences" : "inlang-zed.noop",
+        arguments: firstReference ? [documentUri, range.start, referenceLocations] : [],
+      },
+    })
+  }
+
+  return lenses
+}
+
+export async function createMessageFileDiagnostics({ documentUri, text, project }) {
+  const documentPath = uriToPath(documentUri)
+  if (!documentPath || !isMessageFile(project, documentPath)) return undefined
+
+  const messages = parseMessagesFromText(text)
+  if (!messages) return []
+
+  const referenceCounts = await countProjectReferences(project)
+  return [...messages.entries()]
+    .flatMap(([messageId]) => {
+      const diagnostics = []
+      const range = findJsonKeyRange(text, messageId)
+      if (!range) return diagnostics
+
+      if ((referenceCounts.get(messageId) ?? 0) === 0) {
+        diagnostics.push({
+          range,
+          severity: 2,
+          source: "Inlang Zed",
+          code: "unused-message",
+          message: `Message '${messageId}' is not referenced in this Inlang project.`,
+        })
+      }
+
+      return diagnostics
+    })
+}
+
+async function findProjectReferenceLocations(project, messageId) {
+  return (await findProjectReferenceLocationsByMessage(project)).get(messageId) ?? []
+}
+
+async function findProjectReferenceLocationsByMessage(project) {
+  const locationsByMessage = new Map()
+
+  for (const filePath of await discoverSourceFiles(project.projectRoot)) {
+    const text = await readText(filePath)
+    if (text === undefined) continue
+
+    for (const reference of findMessageReferences(text)) {
+      const messageId = resolveMessageId(project, reference.rawKey)
+
+      const locations = locationsByMessage.get(messageId) ?? []
+      locations.push({
+        uri: pathToUri(filePath),
+        range: reference.range,
+      })
+      locationsByMessage.set(messageId, locations)
+    }
+  }
+
+  return locationsByMessage
+}
+
+function messageIdAtPositionInMessageFile({ documentUri, text, position, project }) {
+  const documentPath = uriToPath(documentUri)
+  if (!documentPath || !isMessageFile(project, documentPath)) return undefined
+
+  const messages = parseMessagesFromText(text)
+  if (!messages) return undefined
+
+  for (const messageId of messages.keys()) {
+    const range = findJsonKeyRange(text, messageId)
+    if (range && rangeContains(range, position)) return messageId
+  }
+
+  return undefined
+}
+
+function isMessageFile(project, filePath) {
+  return [...project.messageFilesByLocale.values()].some(
+    (messageFilePath) => path.resolve(messageFilePath) === path.resolve(filePath),
+  )
+}
+
+function parseMessagesFromText(text) {
+  try {
+    const parsed = JSON.parse(text)
+    return isPlainObject(parsed) ? flattenMessages(parsed) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function countProjectReferences(project) {
+  const counts = new Map()
+
+  for (const filePath of await discoverSourceFiles(project.projectRoot)) {
+    const text = await readText(filePath)
+    if (text === undefined) continue
+
+    for (const reference of findMessageReferences(text)) {
+      const messageId = resolveMessageId(project, reference.rawKey)
+      counts.set(messageId, (counts.get(messageId) ?? 0) + 1)
+    }
+  }
+
+  return counts
+}
+
+async function discoverSourceFiles(rootPath) {
+  const files = []
+
+  async function walk(directory) {
+    let entries
+    try {
+      entries = await fs.readdir(directory, { withFileTypes: true })
+    } catch {
+      return
+    }
+
+    for (const entry of entries) {
+      const entryPath = path.join(directory, entry.name)
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name) || isGeneratedParaglidePath(entryPath)) continue
+        await walk(entryPath)
+        continue
+      }
+
+      if (!entry.isFile()) continue
+      if (!SOURCE_EXTENSIONS.has(path.extname(entry.name))) continue
+      if (isGeneratedParaglidePath(entryPath)) continue
+      files.push(entryPath)
+    }
+  }
+
+  await walk(rootPath)
+  return files
+}
+
+function isGeneratedParaglidePath(filePath) {
+  return path
+    .normalize(filePath)
+    .split(path.sep)
+    .some((part) => part === "paraglide" || part === ".paraglide")
+}
+
+async function readText(filePath) {
+  try {
+    return await fs.readFile(filePath, "utf8")
+  } catch {
+    return undefined
+  }
 }
 
 export function createExtractCodeAction({ documentUri, text, range, project }) {
@@ -579,26 +783,29 @@ export function upsertFlatJsonMessage(text, messageId, message) {
 }
 
 export function findJsonKeyRange(text, messageId) {
-  const directRange = findFlatJsonKeyRange(text, messageId)
-  if (directRange) return directRange
+  const token = findJsonPropertyToken(text, messageId)
+  return token ? rangeForOffsets(text, token.keyStartOffset, token.keyEndOffset) : undefined
+}
+
+function findJsonPropertyToken(text, messageId) {
+  const directToken = findFlatJsonPropertyToken(text, messageId)
+  if (directToken) return directToken
 
   const parts = messageId.split(".")
   if (parts.length < 2) return undefined
 
-  return findNestedJsonKeyRange(text, parts)
+  return findNestedJsonPropertyToken(text, parts)
 }
 
-function findFlatJsonKeyRange(text, key) {
-  for (const match of text.matchAll(/"((?:\\.|[^"\\])*)"\s*:/g)) {
-    if (unescapeJsonString(match[1]) !== key) continue
-    const startOffset = match.index + 1
-    return rangeForOffsets(text, startOffset, startOffset + match[1].length)
+function findFlatJsonPropertyToken(text, key) {
+  for (const token of jsonPropertyTokens(text)) {
+    if (token.key === key) return token
   }
 
   return undefined
 }
 
-function findNestedJsonKeyRange(text, parts) {
+function findNestedJsonPropertyToken(text, parts) {
   const tokens = [...jsonPropertyTokens(text)]
   const stack = []
 
@@ -609,7 +816,7 @@ function findNestedJsonKeyRange(text, parts) {
 
     const path = [...stack.map((entry) => entry.key), token.key]
     if (path.join(".") === parts.join(".")) {
-      return rangeForOffsets(text, token.keyStartOffset, token.keyEndOffset)
+      return token
     }
 
     const objectStartOffset = nextNonWhitespaceOffset(text, token.colonOffset + 1)

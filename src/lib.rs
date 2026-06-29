@@ -1,5 +1,6 @@
 use zed_extension_api::{
-    self as zed, settings::LspSettings, Command, LanguageServerId, Result, Worktree,
+    self as zed, serde_json::Value, settings::LspSettings, Command, LanguageServerId, Result,
+    Worktree,
 };
 
 const SERVER_PATH: &str = "server/bin/server.js";
@@ -45,12 +46,7 @@ impl zed::Extension for InlangZedExtension {
         language_server_id: &LanguageServerId,
         worktree: &Worktree,
     ) -> Result<Option<zed_extension_api::serde_json::Value>> {
-        let settings = LspSettings::for_worktree(language_server_id.as_ref(), worktree)
-            .ok()
-            .and_then(|settings| settings.initialization_options)
-            .unwrap_or_default();
-
-        Ok(Some(settings))
+        Ok(Some(merged_lsp_settings(language_server_id, worktree)))
     }
 
     fn language_server_workspace_configuration(
@@ -58,12 +54,39 @@ impl zed::Extension for InlangZedExtension {
         language_server_id: &LanguageServerId,
         worktree: &Worktree,
     ) -> Result<Option<zed_extension_api::serde_json::Value>> {
-        let settings = LspSettings::for_worktree(language_server_id.as_ref(), worktree)
-            .ok()
-            .and_then(|settings| settings.settings)
-            .unwrap_or_default();
+        Ok(Some(merged_lsp_settings(language_server_id, worktree)))
+    }
+}
 
-        Ok(Some(settings))
+fn merged_lsp_settings(language_server_id: &LanguageServerId, worktree: &Worktree) -> Value {
+    let lsp_settings = LspSettings::for_worktree(language_server_id.as_ref(), worktree).ok();
+    let mut settings = lsp_settings
+        .as_ref()
+        .and_then(|settings| settings.initialization_options.clone())
+        .unwrap_or_default();
+
+    if let Some(workspace_settings) = lsp_settings.and_then(|settings| settings.settings) {
+        merge_json_value_into(workspace_settings, &mut settings);
+    }
+
+    settings
+}
+
+fn merge_json_value_into(source: Value, target: &mut Value) {
+    match (source, target) {
+        (Value::Object(source), Value::Object(target)) => {
+            for (key, source_value) in source {
+                match target.get_mut(&key) {
+                    Some(target_value) => merge_json_value_into(source_value, target_value),
+                    None => {
+                        target.insert(key, source_value);
+                    }
+                }
+            }
+        }
+        (source, target) => {
+            *target = source;
+        }
     }
 }
 

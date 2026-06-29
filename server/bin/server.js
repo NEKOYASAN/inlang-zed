@@ -6,9 +6,11 @@ import {
   createExtractCodeAction,
   createHover,
   createInlayHints,
+  createMessageFileDiagnostics,
+  createReferenceCodeLenses,
+  createReferences,
   installSyncFileReader,
   loadWorkspace,
-  pathToUri,
   selectProjectForFile,
   uriToPath,
 } from "../src/core.js"
@@ -78,11 +80,20 @@ async function handleRequest(message) {
       case "textDocument/definition":
         respond(message.id, await definition(message.params))
         break
+      case "textDocument/references":
+        respond(message.id, await references(message.params))
+        break
+      case "workspace/executeCommand":
+        respond(message.id, await executeCommand(message.params))
+        break
       case "textDocument/inlayHint":
         respond(message.id, await inlayHint(message.params))
         break
       case "textDocument/codeAction":
         respond(message.id, await codeAction(message.params))
+        break
+      case "textDocument/codeLens":
+        respond(message.id, await codeLens(message.params))
         break
       case "textDocument/diagnostic":
         respond(message.id, await documentDiagnostic(message.params))
@@ -131,6 +142,12 @@ async function handleNotification(message) {
       })
       break
     case "workspace/didChangeConfiguration":
+      if (Object.hasOwn(message.params ?? {}, "settings")) {
+        settings = isPlainObject(message.params.settings) ? message.params.settings : {}
+      }
+      await refreshWorkspace()
+      await publishAllDiagnostics()
+      break
     case "workspace/didChangeWatchedFiles":
       await refreshWorkspace()
       await publishAllDiagnostics()
@@ -156,12 +173,19 @@ async function initialize(message) {
       },
       hoverProvider: true,
       definitionProvider: true,
+      referencesProvider: true,
       inlayHintProvider: {
         resolveProvider: false,
       },
       codeActionProvider: {
         codeActionKinds: ["refactor.extract"],
         resolveProvider: false,
+      },
+      codeLensProvider: {
+        resolveProvider: false,
+      },
+      executeCommandProvider: {
+        commands: ["inlang-zed.noop"],
       },
       diagnosticProvider: {
         interFileDependencies: false,
@@ -192,6 +216,18 @@ async function definition(params) {
   return createDefinition(context.text, context.project, params.position) ?? null
 }
 
+async function references(params) {
+  const context = await documentContext(params.textDocument.uri)
+  if (!context) return []
+
+  return createReferences({
+    documentUri: params.textDocument.uri,
+    text: context.text,
+    position: params.position,
+    project: context.project,
+  })
+}
+
 async function inlayHint(params) {
   const context = await documentContext(params.textDocument.uri)
   if (!context) return []
@@ -214,8 +250,38 @@ async function codeAction(params) {
   return action ? [action] : []
 }
 
+async function codeLens(params) {
+  const context = await documentContext(params.textDocument.uri)
+  if (!context) return []
+
+  return createReferenceCodeLenses({
+    documentUri: params.textDocument.uri,
+    text: context.text,
+    project: context.project,
+  })
+}
+
+async function executeCommand() {
+  return null
+}
+
 async function publishDiagnostics(uri) {
   const context = await documentContext(uri)
+  if (context) {
+    const messageFileDiagnostics = await createMessageFileDiagnostics({
+      documentUri: uri,
+      text: context.text,
+      project: context.project,
+    })
+    if (messageFileDiagnostics) {
+      send("textDocument/publishDiagnostics", {
+        uri,
+        diagnostics: messageFileDiagnostics,
+      })
+      return
+    }
+  }
+
   send("textDocument/publishDiagnostics", {
     uri,
     diagnostics: context ? createDiagnostics(context.text, context.project) : [],
@@ -224,6 +290,20 @@ async function publishDiagnostics(uri) {
 
 async function documentDiagnostic(params) {
   const context = await documentContext(params.textDocument.uri)
+  if (context) {
+    const messageFileDiagnostics = await createMessageFileDiagnostics({
+      documentUri: params.textDocument.uri,
+      text: context.text,
+      project: context.project,
+    })
+    if (messageFileDiagnostics) {
+      return {
+        kind: "full",
+        items: messageFileDiagnostics,
+      }
+    }
+  }
+
   return {
     kind: "full",
     items: context ? createDiagnostics(context.text, context.project) : [],
@@ -260,6 +340,10 @@ async function documentText(uri) {
 
 function selectProject(filePath) {
   return selectProjectForFile(workspace?.projects ?? [], filePath)
+}
+
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 function respond(id, result) {

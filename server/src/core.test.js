@@ -10,12 +10,16 @@ import {
   createExtractCodeAction,
   createHover,
   createInlayHints,
+  createMessageFileDiagnostics,
+  createReferenceCodeLenses,
+  createReferences,
   findJsonKeyRange,
   findMessageReferences,
   flattenMessages,
   humanMessageId,
   installSyncFileReader,
   loadWorkspace,
+  pathToUri,
   selectProjectForFile,
   upsertFlatJsonMessage,
 } from "./core.js"
@@ -228,6 +232,103 @@ test("uses the only project for files outside its root in a single-project works
   assert.equal(
     selectProjectForFile(projects, "/repo/shared/Button.svelte").projectRoot,
     "/repo/app",
+  )
+})
+
+test("returns message JSON code lenses with reference counts", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "inlang-zed-codelens-"))
+  const projectPath = path.join(root, "project.inlang")
+  const messagePath = path.join(root, "messages", "en.json")
+  await mkdir(path.join(root, "src", "routes"), { recursive: true })
+  await mkdir(path.join(root, "src", "lib", "paraglide", "messages"), { recursive: true })
+  await mkdir(path.dirname(messagePath), { recursive: true })
+  await mkdir(projectPath)
+  await writeFile(
+    path.join(projectPath, "settings.json"),
+    JSON.stringify({
+      baseLocale: "en",
+      locales: ["en"],
+      "plugin.inlang.json": { pathPattern: "./messages/{languageTag}.json" },
+    }),
+  )
+  const messageText = '{\n  "title": "Title",\n  "nested": {\n    "key": "Nested"\n  },\n  "unused": "Unused"\n}\n'
+  await writeFile(messagePath, messageText)
+  await writeFile(
+    path.join(root, "src", "routes", "+page.svelte"),
+    `<script>import { m } from '$lib/paraglide/messages'</script>\n<h1>{m.title()}</h1>\n<p>{m.title()}</p>\n<p>{m["nested.key"]()}</p>\n`,
+  )
+  await writeFile(
+    path.join(root, "src", "lib", "paraglide", "messages", "generated.js"),
+    `export const title = () => "generated"; m.title();\n`,
+  )
+
+  const workspace = await loadWorkspace(root)
+  const lenses = await createReferenceCodeLenses({
+    documentUri: pathToUri(messagePath),
+    text: messageText,
+    project: workspace.projects[0],
+  })
+
+  assert.deepEqual(
+    lenses.map((lens) => lens.command.title),
+    ["2 references", "1 reference", "0 references"],
+  )
+  assert.equal(lenses[0].command.command, "editor.action.showReferences")
+  assert.deepEqual(lenses[0].command.arguments.slice(0, 2), [
+    pathToUri(messagePath),
+    { line: 1, character: 3 },
+  ])
+  assert.equal(lenses[0].command.arguments[2][0].uri, pathToUri(path.join(root, "src", "routes", "+page.svelte")))
+  assert.deepEqual(lenses[0].command.arguments[2][0].range, {
+    start: { line: 1, character: 7 },
+    end: { line: 1, character: 12 },
+  })
+  assert.equal(lenses[0].command.arguments[2].length, 2)
+  assert.equal(lenses[2].command.command, "inlang-zed.noop")
+  assert.deepEqual(lenses[2].command.arguments, [])
+
+  const references = await createReferences({
+    documentUri: pathToUri(messagePath),
+    text: messageText,
+    position: { line: 1, character: 4 },
+    project: workspace.projects[0],
+  })
+  assert.deepEqual(
+    references.map((reference) => reference.range),
+    [
+      {
+        start: { line: 1, character: 7 },
+        end: { line: 1, character: 12 },
+      },
+      {
+        start: { line: 2, character: 6 },
+        end: { line: 2, character: 11 },
+      },
+    ],
+  )
+
+  const diagnostics = await createMessageFileDiagnostics({
+    documentUri: pathToUri(messagePath),
+    text: messageText,
+    project: workspace.projects[0],
+  })
+
+  assert.deepEqual(
+    diagnostics.map((diagnostic) => ({
+      code: diagnostic.code,
+      message: diagnostic.message,
+      range: diagnostic.range,
+    })),
+    [
+      {
+        code: "unused-message",
+        message: "Message 'unused' is not referenced in this Inlang project.",
+        range: {
+          start: { line: 5, character: 3 },
+          end: { line: 5, character: 9 },
+        },
+      },
+    ],
   )
 })
 

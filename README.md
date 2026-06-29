@@ -8,6 +8,8 @@ Inlang Zed brings Inlang and Paraglide message inspection to Zed through LSP:
 - inlay hints with the preview translation for message references
 - hover tables with all configured locale values
 - diagnostics for missing base messages, missing translations, and empty translations
+- warning diagnostics for message JSON keys with no references
+- code lenses on message JSON keys with workspace reference counts and Zed reference navigation
 - an extract-message code action for selected text
 
 The extension discovers `project.inlang/settings.json` files in the current worktree and reads
