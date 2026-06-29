@@ -55,6 +55,15 @@ test("flattens simple and nested message JSON", () => {
   assert.equal(messages.get("pattern"), "Pattern")
 })
 
+test("does not throw while flattening deeply nested message JSON", () => {
+  let json = "Deep value"
+  for (let index = 0; index < 5000; index += 1) {
+    json = { [`level_${index}`]: json }
+  }
+
+  assert.doesNotThrow(() => flattenMessages(json))
+})
+
 test("loads an Inlang project and returns hints, hover, and diagnostics", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "inlang-zed-"))
   const project = path.join(root, "project.inlang")
@@ -97,6 +106,48 @@ test("loads an Inlang project and returns hints, hover, and diagnostics", async 
   assert.deepEqual(
     diagnostics.map((diagnostic) => diagnostic.code),
     ["missing-translation", "empty-translation", "missing-message"],
+  )
+})
+
+test("rejects configured message paths outside the project root", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "inlang-zed-contained-"))
+  const project = path.join(root, "project.inlang")
+  const externalMessageDirName = `${path.basename(root)}-external-messages`
+  const externalMessages = path.join(root, "..", externalMessageDirName)
+  await mkdir(project)
+  await mkdir(externalMessages)
+  await writeFile(
+    path.join(project, "settings.json"),
+    JSON.stringify({
+      baseLocale: "en",
+      locales: ["en"],
+      "plugin.inlang.json": { pathPattern: `../${externalMessageDirName}/{languageTag}.json` },
+    }),
+  )
+  await writeFile(path.join(externalMessages, "en.json"), JSON.stringify({ secret: "leaked" }))
+
+  const workspace = await loadWorkspace(root)
+  const loadedProject = workspace.projects[0]
+
+  assert.equal(loadedProject.messageFilesByLocale.has("en"), false)
+  assert.deepEqual([...loadedProject.messagesByLocale.get("en").entries()], [])
+  assert.match(loadedProject.errors[0], /outside project root/)
+
+  const text = `t("secret")`
+  const hover = createHover(text, loadedProject, { line: 0, character: 3 })
+  assert.doesNotMatch(hover.contents.value, /leaked/)
+  assert.equal(createDefinition(text, loadedProject, { line: 0, character: 3 }), undefined)
+  assert.equal(
+    createExtractCodeAction({
+      documentUri: pathToUri(path.join(root, "src", "page.svelte")),
+      text: "Hello",
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 5 },
+      },
+      project: loadedProject,
+    }),
+    undefined,
   )
 })
 

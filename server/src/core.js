@@ -210,6 +210,11 @@ export async function loadProject(projectPath, settings = {}) {
       projectRoot,
       pathPattern.replaceAll("{languageTag}", locale).replaceAll("{locale}", locale),
     )
+    if (!isPathInside(messageFile, projectRoot)) {
+      errors.push(`Ignoring message path for locale '${locale}' outside project root: ${messageFile}.`)
+      messagesByLocale.set(locale, new Map())
+      continue
+    }
     messageFilesByLocale.set(locale, messageFile)
 
     const messages = await readJson(messageFile)
@@ -256,31 +261,41 @@ async function readJson(filePath) {
 
 export function flattenMessages(json) {
   const messages = new Map()
+  const stack = [{ value: json, keyPath: "", isRoot: true }]
 
-  function visit(value, keyPath) {
-    if (!keyPath && isPlainObject(value)) {
-      for (const [key, nestedValue] of Object.entries(value)) {
-        if (key === "$schema") continue
-        visit(nestedValue, key)
-      }
-      return
+  while (stack.length > 0) {
+    const { value, keyPath, isRoot } = stack.pop()
+
+    if (isRoot && isPlainObject(value)) {
+      pushNestedMessages(stack, value, "", true)
+      continue
     }
 
     const text = stringifyMessageValue(value)
     if (typeof text === "string") {
       messages.set(keyPath, text)
-      return
+      continue
     }
 
     if (isPlainObject(value)) {
-      for (const [key, nestedValue] of Object.entries(value)) {
-        visit(nestedValue, `${keyPath}.${key}`)
-      }
+      pushNestedMessages(stack, value, keyPath, false)
     }
   }
 
-  visit(json, "")
   return messages
+}
+
+function pushNestedMessages(stack, value, keyPath, isRoot) {
+  const entries = Object.entries(value)
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const [key, nestedValue] = entries[index]
+    if (isRoot && key === "$schema") continue
+    stack.push({
+      value: nestedValue,
+      keyPath: keyPath ? `${keyPath}.${key}` : key,
+      isRoot: false,
+    })
+  }
 }
 
 export function stringifyMessageValue(value) {
