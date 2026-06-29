@@ -1,13 +1,13 @@
-id = "inlang-zed"
-name = "Inlang Zed"
-description = "Inspect Inlang and Paraglide message references with inline hints, hovers, diagnostics, and extract actions."
+id = "inlang"
+name = "Inlang"
+description = "Unofficial Inlang Language Server - Inspect Inlang and Paraglide message references with inline hints, hovers, diagnostics, and extract actions."
 version = "0.1.0"
 schema_version = 1
-authors = ["Taiyu Yoshizawa <hello@nekoyasan.me>"]
+authors = ["Akane Kamiseto <akane@nekoyasan.me>"]
 repository = "https://github.com/nekoyasan/inlang-zed"
 
-[language_servers.inlang-zed]
-name = "Inlang Zed"
+[language_servers.inlang]
+name = "Inlang Language Server"
 languages = [
   "Astro",
   "HTML",
@@ -21,7 +21,7 @@ languages = [
   "Vue.js",
 ]
 
-[language_servers.inlang-zed.language_ids]
+[language_servers.inlang.language_ids]
 "Astro" = "astro"
 "HTML" = "html"
 "JavaScript" = "javascript"

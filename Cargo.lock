@@ -320,7 +320,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "inlang-zed"
+name = "inlang"
 version = "0.1.0"
 dependencies = [
  "zed_extension_api",

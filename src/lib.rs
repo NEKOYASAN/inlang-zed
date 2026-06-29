@@ -1,18 +1,83 @@
+use std::{env, path::PathBuf};
+
 use zed_extension_api::{
     self as zed, serde_json::Value, settings::LspSettings, Command, LanguageServerId, Result,
     Worktree,
 };
 
-const SERVER_PATH: &str = "server/bin/server.js";
-const SERVER_JS: &str = include_str!("../server/bin/server.js");
-const CORE_JS: &str = include_str!("../server/src/core.js");
-const PACKAGE_JSON: &str = r#"{"type":"module"}"#;
+const PACKAGE_NAME: &str = "inlang-language-server";
+const SERVER_PATH: &str = "bin/server.mjs";
 
-struct InlangZedExtension;
+struct InlangExtension {
+    installed: bool,
+}
 
-impl zed::Extension for InlangZedExtension {
+impl InlangExtension {
+    fn server_path() -> Result<PathBuf> {
+        Ok(env::current_dir()
+            .map_err(|error| format!("failed to resolve Inlang extension directory: {error}"))?
+            .join("node_modules")
+            .join(PACKAGE_NAME)
+            .join(SERVER_PATH))
+    }
+
+    fn install_server_if_needed(&mut self, language_server_id: &LanguageServerId) -> Result<()> {
+        let installed_version = zed::npm_package_installed_version(PACKAGE_NAME)?;
+
+        if self.installed && installed_version.is_some() {
+            return Ok(());
+        }
+
+        zed::set_language_server_installation_status(
+            language_server_id,
+            &zed::LanguageServerInstallationStatus::CheckingForUpdate,
+        );
+
+        let latest_version = match zed::npm_package_latest_version(PACKAGE_NAME) {
+            Ok(version) => version,
+            Err(error) if installed_version.is_some() => {
+                self.installed = true;
+                println!(
+                    "failed to check latest {PACKAGE_NAME} version, reusing installed package: {error}"
+                );
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+
+        if installed_version.as_ref() != Some(&latest_version) {
+            zed::set_language_server_installation_status(
+                language_server_id,
+                &zed::LanguageServerInstallationStatus::Downloading,
+            );
+
+            if let Err(error) = zed::npm_install_package(PACKAGE_NAME, &latest_version) {
+                if installed_version.is_none() {
+                    return Err(format!("failed to install {PACKAGE_NAME}: {error}"));
+                }
+
+                println!(
+                    "failed to update {PACKAGE_NAME} to {latest_version}, reusing installed package: {error}"
+                );
+            }
+        }
+
+        let server_path = Self::server_path()?;
+        if !server_path.is_file() {
+            return Err(format!(
+                "installed package '{PACKAGE_NAME}' did not contain expected server entry '{}'",
+                server_path.display()
+            ));
+        }
+
+        self.installed = true;
+        Ok(())
+    }
+}
+
+impl zed::Extension for InlangExtension {
     fn new() -> Self {
-        Self
+        Self { installed: false }
     }
 
     fn language_server_command(
@@ -21,22 +86,30 @@ impl zed::Extension for InlangZedExtension {
         worktree: &Worktree,
     ) -> Result<Command> {
         let settings = LspSettings::for_worktree(language_server_id.as_ref(), worktree)?;
-        let server_path = materialize_server()?;
 
         if let Some(binary) = settings.binary {
-            return Ok(Command {
-                command: match binary.path {
-                    Some(path) => path,
-                    None => zed::node_binary_path()?,
-                },
-                args: binary.arguments.unwrap_or_else(|| vec![server_path]),
-                env: Default::default(),
-            });
+            if let Some(path) = binary.path {
+                return Ok(Command {
+                    command: path,
+                    args: binary.arguments.unwrap_or_default(),
+                    env: Default::default(),
+                });
+            }
+
+            if let Some(arguments) = binary.arguments {
+                return Ok(Command {
+                    command: zed::node_binary_path()?,
+                    args: arguments,
+                    env: Default::default(),
+                });
+            }
         }
+
+        self.install_server_if_needed(language_server_id)?;
 
         Ok(Command {
             command: zed::node_binary_path()?,
-            args: vec![server_path],
+            args: vec![Self::server_path()?.to_string_lossy().to_string()],
             env: Default::default(),
         })
     }
@@ -90,38 +163,4 @@ fn merge_json_value_into(source: Value, target: &mut Value) {
     }
 }
 
-fn materialize_server() -> Result<String> {
-    let work_dir = std::env::current_dir()
-        .map_err(|error| format!("failed to resolve Inlang Zed extension directory: {error}"))?;
-
-    write_if_changed(&work_dir.join("package.json"), PACKAGE_JSON)?;
-    write_if_changed(&work_dir.join("server/bin/server.js"), SERVER_JS)?;
-    write_if_changed(&work_dir.join("server/src/core.js"), CORE_JS)?;
-
-    Ok(work_dir.join(SERVER_PATH).to_string_lossy().to_string())
-}
-
-fn write_if_changed(path: &std::path::Path, content: &str) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "failed to create Inlang Zed server directory '{}': {error}",
-                parent.display()
-            )
-        })?;
-    }
-
-    match std::fs::read_to_string(path) {
-        Ok(existing) if existing == content => return Ok(()),
-        _ => {}
-    }
-
-    std::fs::write(path, content).map_err(|error| {
-        format!(
-            "failed to write Inlang Zed server file '{}': {error}",
-            path.display()
-        )
-    })
-}
-
-zed::register_extension!(InlangZedExtension);
+zed::register_extension!(InlangExtension);

@@ -1,9 +1,9 @@
-# Inlang Zed
+# Inlang
 
 > [!IMPORTANT]
 > This extension is a work in progress and may not be fully functional.
 
-Inlang Zed brings Inlang and Paraglide message inspection to Zed through LSP:
+Inlang brings Inlang and Paraglide message inspection to Zed through LSP:
 
 - inlay hints with the preview translation for message references
 - hover tables with all configured locale values
@@ -17,7 +17,7 @@ JSON message files configured through `plugin.inlang.json.pathPattern` or
 `plugin.inlang.messageFormat.pathPattern`.
 
 > [!NOTE]
-> This extension is heavily inspired by
+> This project is heavily inspired by
 > [opral/sherlock](https://github.com/opral/sherlock), the VS Code extension for inspecting,
 > previewing, editing, and linting Inlang messages.
 > 
@@ -42,7 +42,7 @@ m["hello.world"]()
 messages.hello_world()
 ```
 
-For Paraglide dot calls, Inlang Zed resolves `m.some_key()` to either `some_key` or a dotted
+For Paraglide dot calls, Inlang resolves `m.some_key()` to either `some_key` or a dotted
 message id whose generated identifier is `some_key`.
 
 ## Development
@@ -50,17 +50,18 @@ message id whose generated identifier is `some_key`.
 Run the checks:
 
 ```sh
-npm run check
+cargo check
 ```
 
-Install the repository as a Zed dev extension from Zed's Extensions view.
+Install the repository as a Zed dev extension from Zed's Extensions view. The extension downloads
+and runs the `inlang-language-server` npm package through Zed's extension API.
 
 Optional Zed settings:
 
 ```json
 {
   "lsp": {
-    "inlang-zed": {
+    "inlang": {
       "initialization_options": {
         "previewLocale": "de",
         "maxHintLength": 80
