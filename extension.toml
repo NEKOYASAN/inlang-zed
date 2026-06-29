@@ -1,0 +1,34 @@
+id = "inlang-zed"
+name = "Inlang Zed"
+description = "Inspect Inlang and Paraglide message references with inline hints, hovers, diagnostics, and extract actions."
+version = "0.1.0"
+schema_version = 1
+authors = ["Taiyu Yoshizawa <hello@nekoyasan.me>"]
+repository = "https://github.com/nekoyasan/inlang-zed"
+
+[language_servers.inlang-zed]
+name = "Inlang Zed"
+languages = [
+  "Astro",
+  "HTML",
+  "JavaScript",
+  "JSX",
+  "JSON",
+  "JSONC",
+  "Svelte",
+  "TSX",
+  "TypeScript",
+  "Vue.js",
+]
+
+[language_servers.inlang-zed.language_ids]
+"Astro" = "astro"
+"HTML" = "html"
+"JavaScript" = "javascript"
+"JSX" = "javascriptreact"
+"JSON" = "json"
+"JSONC" = "jsonc"
+"Svelte" = "svelte"
+"TSX" = "typescriptreact"
+"TypeScript" = "typescript"
+"Vue.js" = "vue"
