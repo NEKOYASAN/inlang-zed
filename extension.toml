@@ -1,7 +1,7 @@
 id = "inlang"
 name = "Inlang"
 description = "Unofficial Inlang Language Server - Inspect Inlang and Paraglide message references with inline hints, hovers, diagnostics, and extract actions."
-version = "0.1.0"
+version = "0.0.1"
 schema_version = 1
 authors = ["Akane Kamiseto <akane@nekoyasan.me>"]
 repository = "https://github.com/nekoyasan/inlang-zed"
